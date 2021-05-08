@@ -535,29 +535,19 @@ node_target_weight(Package, Weight)
     node_target(Package, Target),
     target_weight(Target, Package, Weight).
 
-% compatibility rules for targets among nodes
-node_target_match_pref(Dependency, Target)
-  :- depends_on(Package, Dependency),
-     node_target_match_pref(Package, Target),
-     not node_target_set(Dependency, _).
-
-node_target_match_pref(Dependency, Target)
-  :- depends_on(Package, Dependency),
-     node_target_set(Package, Target),
-     not node_target_match_pref(Package, Target),
-     not node_target_set(Dependency, _).
-
-node_target_match_pref(Dependency, Target)
-  :- depends_on(Package, Dependency),
-     root(Package), node_target(Package, Target),
-     not node_target_match_pref(Package, _).
-
-node_target_match(Package, 1)
-  :- node_target(Package, Target), node_target_match_pref(Package, Target).
-
 derive_target_from_parent(Parent, Package)
-  :- depends_on(Parent, Package), not package_target_weight(_, Package, _).
+  :- depends_on(Parent, Package),
+     not package_target_weight(_, Package, _).
 
+% compatibility rules for targets among nodes
+node_target_match(Parent, Dependency)
+  :- depends_on(Parent, Dependency),
+     node_target(Parent, Target),
+     node_target(Dependency, Target).
+
+node_target_mismatch(Parent, Dependency)
+  :- depends_on(Parent, Dependency),
+     not node_target_match(Parent, Dependency).
 
 #defined node_target_set/2.
 #defined package_target_weight/3.
@@ -603,32 +593,16 @@ node_compiler_version(Package, Compiler, Version) :- node_compiler_version_set(P
    not compiler_supports_os(Compiler, Version, OS),
    not allow_compiler(Compiler, Version).
 
-% If the compiler is what was prescribed from command line etc.
-% or is the same as a root node, there is a version match
+% If a package and one of its dependencies don't have the
+% same compiler there's a mismatch.
+compiler_match(Package, Dependency)
+  :- depends_on(Package, Dependency),
+     node_compiler_version(Package, Compiler, Version),
+     node_compiler_version(Dependency, Compiler, Version).
 
-% Compiler prescribed in the root spec
-node_compiler_version_match_pref(Package, Compiler, V)
- :- node_compiler_set(Package, Compiler),
-    node_compiler_version(Package, Compiler, V),
-    not external(Package).
-
-% Compiler inherited from a parent node
-node_compiler_version_match_pref(Dependency, Compiler, V)
- :- depends_on(Package, Dependency),
-    node_compiler_version_match_pref(Package, Compiler, V),
-    node_compiler_version(Dependency, Compiler, V),
-    not node_compiler_set(Dependency, Compiler).
-
-% Compiler inherited from the root package
-node_compiler_version_match_pref(Dependency, Compiler, V)
- :- depends_on(Package, Dependency),
-    node_compiler_version(Package, Compiler, V), root(Package),
-    node_compiler_version(Dependency, Compiler, V),
-    not node_compiler_set(Dependency, Compiler).
-
-compiler_version_match(Package, 1)
- :- node_compiler_version(Package, Compiler, V),
-    node_compiler_version_match_pref(Package, Compiler, V).
+compiler_mismatch(Package, Dependency)
+  :- depends_on(Package, Dependency),
+     not compiler_match(Package, Dependency).
 
 #defined node_compiler_set/2.
 #defined node_compiler_version_set/3.
@@ -767,19 +741,15 @@ opt_criterion(8, "count of non-root multi-valued variants").
 #minimize{ 0@8 : #true }.
 #maximize {
     1@8,Package,Variant,Value
-    : variant_not_default(Package, Variant, Value, Weight),
+    : variant_not_default(Package, Variant, Value, _),
     not variant_single_value(Package, Variant),
     not root(Package)
 }.
 
-% Try to maximize the number of compiler matches in the DAG,
-% while minimizing the number of nodes. This is done because
-% a maximization on the number of matches for compilers is highly
-% correlated to a preference to have as many nodes as possible
-opt_criterion(7, "compiler matches + number of nodes").
+% Try to minimize the number of compiler mismatches in the DAG.
+opt_criterion(7, "compiler mismatches").
 #minimize{ 0@7 : #true }.
-#minimize{ 1@7,Package : node(Package) }.
-#maximize{ Weight@7,Package : compiler_version_match(Package, Weight) }.
+#minimize{ 1@7,Package,Dependency : compiler_mismatch(Package, Dependency) }.
 
 % Choose more recent versions for nodes
 opt_criterion(6, "version badness").
@@ -793,11 +763,11 @@ opt_criterion(5, "non-preferred compilers").
 #minimize{ 0@5 : #true }.
 #minimize{ Weight@5,Package : compiler_weight(Package, Weight) }.
 
-% Maximize the number of matches for targets in the DAG, try
+% Minimize the number of mismatches for targets in the DAG, try
 % to select the preferred target.
-opt_criterion(4, "target matches").
+opt_criterion(4, "target mismatches").
 #minimize{ 0@4 : #true }.
-#maximize{ Weight@4,Package : node_target_match(Package, Weight) }.
+#minimize{ 1@4,Package,Dependency : node_target_mismatch(Package, Dependency) }.
 
 opt_criterion(3, "non-preferred targets").
 #minimize{ 0@3 : #true }.
